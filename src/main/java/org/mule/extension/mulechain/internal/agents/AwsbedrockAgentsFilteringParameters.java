@@ -20,6 +20,10 @@ public class AwsbedrockAgentsFilteringParameters {
 
   @Parameter
   @Optional
+  private String overrideSearchType;
+
+  @Parameter
+  @Optional
   private RetrievalMetadataFilterType retrievalMetadataFilterType;
 
   @Parameter
@@ -32,6 +36,10 @@ public class AwsbedrockAgentsFilteringParameters {
 
   public Integer getNumberOfResults() {
     return numberOfResults;
+  }
+
+  public String getOverrideSearchType() {
+    return overrideSearchType;
   }
 
   public RetrievalMetadataFilterType getRetrievalMetadataFilterType() {

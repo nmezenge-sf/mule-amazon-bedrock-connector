@@ -12,7 +12,7 @@
 
     <groupId>com.mulesoft.connectors</groupId>
     <artifactId>mule4-amazon-bedrock-connector</artifactId>
-    <version>0.5.3</version>
+    <version>0.5.2</version>
     <packaging>mule-extension</packaging>
     <name>MuleSoft Amazon Bedrock Connector - Mule 4</name>
     <description>The MuleSoft Amazon Bedrock connector is designed to provide access to Amazon Bedrock foundational models from mule applications</description>

@@ -1050,8 +1050,7 @@ public class AwsbedrockAgentsPayloadHelper {
 
   }
 
-  private static software.amazon.awssdk.services.bedrockagentruntime.model.SearchType convertToSdkSearchType(
-                                                                                                             AwsbedrockAgentsFilteringParameters.SearchType connectorSearchType) {
+  private static software.amazon.awssdk.services.bedrockagentruntime.model.SearchType convertToSdkSearchType(AwsbedrockAgentsFilteringParameters.SearchType connectorSearchType) {
     if (connectorSearchType == null) {
       return null;
     }

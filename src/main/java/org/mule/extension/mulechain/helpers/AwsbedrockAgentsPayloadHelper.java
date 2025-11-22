@@ -620,7 +620,7 @@ public class AwsbedrockAgentsPayloadHelper {
                                                        Boolean excludePreviousThinkingSteps,
                                                        Integer previousConversationTurnsToInclude, String knowledgeBaseId,
                                                        Integer numberOfResults,
-                                                       String overrideSearchType,
+                                                       AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
                                                        AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
                                                        Map<String, String> metadataFilters,
                                                        BedrockAgentRuntimeAsyncClient bedrockAgentRuntimeAsyncClient) {
@@ -774,7 +774,8 @@ public class AwsbedrockAgentsPayloadHelper {
   public static InputStream invokeAgentSSEStream(String agentAlias, String agentId, String prompt,
                                                  Boolean enableTrace, Boolean latencyOptimized, String sessionId,
                                                  Boolean excludePreviousThinkingSteps, Integer previousConversationTurnsToInclude,
-                                                 String knowledgeBaseId, Integer numberOfResults, String overrideSearchType,
+                                                 String knowledgeBaseId, Integer numberOfResults,
+                                                 AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
                                                  AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
                                                  Map<String, String> metadataFilters,
                                                  BedrockAgentRuntimeAsyncClient bedrockAgentRuntimeAsyncClient) {
@@ -818,7 +819,8 @@ public class AwsbedrockAgentsPayloadHelper {
   private static void streamBedrockResponse(String agentAlias, String agentId, String prompt, Boolean enableTrace,
                                             Boolean latencyOptimized, String sessionId,
                                             Boolean excludePreviousThinkingSteps, Integer previousConversationTurnsToInclude,
-                                            String knowledgeBaseId, Integer numberOfResults, String overrideSearchType,
+                                            String knowledgeBaseId, Integer numberOfResults,
+                                            AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
                                             AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
                                             Map<String, String> metadataFilters,
                                             BedrockAgentRuntimeAsyncClient client,
@@ -958,7 +960,8 @@ public class AwsbedrockAgentsPayloadHelper {
 
 
 
-  private static Consumer<SessionState.Builder> buildSessionState(String knowledgeBaseId, Integer numberOfResults, String overrideSearchType,
+  private static Consumer<SessionState.Builder> buildSessionState(String knowledgeBaseId, Integer numberOfResults,
+                                                                  AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
                                                                   AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
                                                                   Map<String, String> metadataFilters) {
     return sessionStateBuilder -> {
@@ -975,7 +978,8 @@ public class AwsbedrockAgentsPayloadHelper {
     };
   }
 
-  private static KnowledgeBaseVectorSearchConfiguration buildVectorSearchConfiguration(Integer numberOfResults, String overrideSearchType,
+  private static KnowledgeBaseVectorSearchConfiguration buildVectorSearchConfiguration(Integer numberOfResults,
+                                                                                       AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
                                                                                        AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
                                                                                        Map<String, String> metadataFilters) {
 
@@ -999,11 +1003,12 @@ public class AwsbedrockAgentsPayloadHelper {
             b.numberOfResults(numberOfResults);
         };
 
-     // apply overrideSearchType only if not null
+    // apply overrideSearchType only if not null
     Consumer<KnowledgeBaseVectorSearchConfiguration.Builder> applyOptionalOverrideSearchType =
         b -> {
-          if (overrideSearchType != null )
-            b.overrideSearchType(overrideSearchType);
+          if (overrideSearchType != null)
+            // Use the conversion function to pass the SDK's SearchType
+            b.overrideSearchType(convertToSdkSearchType(overrideSearchType));
         };
 
     if (nonEmptyFilters.size() > 1) {
@@ -1043,6 +1048,22 @@ public class AwsbedrockAgentsPayloadHelper {
           .build();
     }
 
+  }
+
+  private static software.amazon.awssdk.services.bedrockagentruntime.model.SearchType convertToSdkSearchType(
+                                                                                                             AwsbedrockAgentsFilteringParameters.SearchType connectorSearchType) {
+    if (connectorSearchType == null) {
+      return null;
+    }
+    switch (connectorSearchType) {
+      case HYBRID:
+        return software.amazon.awssdk.services.bedrockagentruntime.model.SearchType.HYBRID;
+      case SEMANTIC:
+        return software.amazon.awssdk.services.bedrockagentruntime.model.SearchType.SEMANTIC;
+      default:
+        // Fail fast: return the error back by throwing an exception so callers can handle it
+        throw new IllegalArgumentException("Unsupported SearchType: " + connectorSearchType);
+    }
   }
 
   private static Consumer<BedrockModelConfigurations.Builder> buildModelConfigurations(

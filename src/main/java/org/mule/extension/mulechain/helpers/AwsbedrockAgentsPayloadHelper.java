@@ -932,7 +932,6 @@ public class AwsbedrockAgentsPayloadHelper {
     return completionData;
   }
 
-    JSONObject errorData = new JSONObject();
   private static String formatSSEEvent(String eventType, String payload) {
     StringBuilder sb = new StringBuilder();
     sb.append("event: ").append(eventType).append("\n");
@@ -953,9 +952,18 @@ public class AwsbedrockAgentsPayloadHelper {
         return;
       }
 
-      List<KnowledgeBaseConfiguration> sdkKbConfigs =
-          kbConfigs.stream().map(kb -> KnowledgeBaseConfiguration.builder().knowledgeBaseId(kb.getKnowledgeBaseId()).build())
-              .collect(Collectors.toList());
+      List<KnowledgeBaseConfiguration> sdkKbConfigs = kbConfigs.stream().map(kb -> {
+        KnowledgeBaseVectorSearchConfiguration vectorCfg = buildVectorSearchConfiguration(kb.getNumberOfResults(),
+                                                                                          kb.getOverrideSearchType(),
+                                                                                          kb.getRetrievalMetadataFilterType(),
+                                                                                          kb.getMetadataFilters());
+        KnowledgeBaseRetrievalConfiguration retrievalCfg = KnowledgeBaseRetrievalConfiguration.builder()
+            .vectorSearchConfiguration(vectorCfg)
+            .build();
+        return KnowledgeBaseConfiguration.builder().knowledgeBaseId(kb.getKnowledgeBaseId())
+            .retrievalConfiguration(retrievalCfg)
+            .build();
+      }).collect(Collectors.toList());
 
       if (!sdkKbConfigs.isEmpty()) {
         sessionStateBuilder.knowledgeBaseConfigurations(sdkKbConfigs);

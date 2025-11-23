@@ -152,12 +152,15 @@ public class AwsbedrockAgentsOperations {
                                    @ParameterGroup(
                                        name = "Session properties") AwsbedrockAgentsSessionParameters awsBedrockSessionParameters,
                                    @ParameterGroup(
-                                       name = "Knowledge Base Metadata Filtering") AwsbedrockAgentsFilteringParameters awsBedrockAgentsFilteringParameters,
+                                       name = "Knowledge Base Metadata Filtering (for single KB Id)") AwsbedrockAgentsFilteringParameters awsBedrockAgentsFilteringParameters,
+                                   @ParameterGroup(
+                                       name = "Knowledge Base Metadata Filtering (for multiple KB Ids)") AwsbedrockAgentsMultipleFilteringParameters awsBedrockAgentsMultipleFilteringParameters,
                                    @ParameterGroup(
                                        name = "Additional properties") AwsbedrockAgentsParameters awsBedrockAgentsParameters) {
     String response = AwsbedrockAgentsPayloadHelper.chatWithAgent(agentAliasId, agentId, prompt, enableTrace,
                                                                   latencyOptimized, configuration, awsBedrockSessionParameters,
                                                                   awsBedrockAgentsFilteringParameters,
+                                                                  awsBedrockAgentsMultipleFilteringParameters,
                                                                   awsBedrockAgentsParameters);
     return toInputStream(response, StandardCharsets.UTF_8);
   }
@@ -173,12 +176,15 @@ public class AwsbedrockAgentsOperations {
                                             @ParameterGroup(
                                                 name = "Session properties") AwsbedrockAgentsSessionParameters awsBedrockSessionParameters,
                                             @ParameterGroup(
-                                                name = "Knowledge Base Metadata Filtering") AwsbedrockAgentsFilteringParameters awsBedrockAgentsFilteringParameters,
+                                                name = "Knowledge Base Metadata Filtering (for single KB Id)") AwsbedrockAgentsFilteringParameters awsBedrockAgentsFilteringParameters,
+                                            @ParameterGroup(
+                                                name = "Knowledge Base Metadata Filtering (for multiple KB Ids)") AwsbedrockAgentsMultipleFilteringParameters awsBedrockAgentsMultipleFilteringParameters,
                                             @ParameterGroup(
                                                 name = "Additional properties") AwsbedrockAgentsParameters awsBedrockAgentsParameters) {
     return AwsbedrockAgentsPayloadHelper.chatWithAgentSSEStream(agentAliasId, agentId, prompt, enableTrace,
                                                                 latencyOptimized, configuration, awsBedrockSessionParameters,
                                                                 awsBedrockAgentsFilteringParameters,
+                                                                awsBedrockAgentsMultipleFilteringParameters,
                                                                 awsBedrockAgentsParameters);
   }
 

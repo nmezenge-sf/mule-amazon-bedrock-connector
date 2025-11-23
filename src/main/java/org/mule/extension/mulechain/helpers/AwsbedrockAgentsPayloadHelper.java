@@ -12,6 +12,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.mule.extension.mulechain.internal.AwsbedrockConfiguration;
 import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters;
+import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsMultipleFilteringParameters;
 import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsParameters;
 import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsSessionParameters;
 import org.slf4j.Logger;
@@ -588,6 +589,7 @@ public class AwsbedrockAgentsPayloadHelper {
                                      AwsbedrockConfiguration configuration,
                                      AwsbedrockAgentsSessionParameters awsbedrockAgentsSessionParameters,
                                      AwsbedrockAgentsFilteringParameters awsBedrockAgentsFilteringParameters,
+                                     AwsbedrockAgentsMultipleFilteringParameters awsBedrockAgentsMultipleFilteringParameters,
                                      AwsbedrockAgentsParameters awsbedrockAgentsParameters) {
 
     return BedrockClientInvoker.executeWithErrorHandling(() -> {
@@ -602,11 +604,8 @@ public class AwsbedrockAgentsPayloadHelper {
       return invokeAgent(agentAlias, agentId, prompt, enableTrace, latencyOptimized, effectiveSessionId,
                          awsbedrockAgentsSessionParameters.getExcludePreviousThinkingSteps(),
                          awsbedrockAgentsSessionParameters.getPreviousConversationTurnsToInclude(),
-                         awsBedrockAgentsFilteringParameters.getKnowledgeBaseId(),
-                         awsBedrockAgentsFilteringParameters.getNumberOfResults(),
-                         awsBedrockAgentsFilteringParameters.getOverrideSearchType(),
-                         awsBedrockAgentsFilteringParameters.getRetrievalMetadataFilterType(),
-                         awsBedrockAgentsFilteringParameters.getMetadataFilters(),
+                         buildKnowledgeBaseConfigs(awsBedrockAgentsFilteringParameters,
+                                                   awsBedrockAgentsMultipleFilteringParameters),
                          bedrockAgentRuntimeAsyncClient)
           .thenApply(response -> {
             logger.debug(response);
@@ -618,11 +617,8 @@ public class AwsbedrockAgentsPayloadHelper {
   private static CompletableFuture<String> invokeAgent(String agentAlias, String agentId, String prompt,
                                                        Boolean enableTrace, Boolean latencyOptimized, String sessionId,
                                                        Boolean excludePreviousThinkingSteps,
-                                                       Integer previousConversationTurnsToInclude, String knowledgeBaseId,
-                                                       Integer numberOfResults,
-                                                       AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
-                                                       AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
-                                                       Map<String, String> metadataFilters,
+                                                       Integer previousConversationTurnsToInclude,
+                                                       java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
                                                        BedrockAgentRuntimeAsyncClient bedrockAgentRuntimeAsyncClient) {
 
     long startTime = System.currentTimeMillis();
@@ -633,7 +629,7 @@ public class AwsbedrockAgentsPayloadHelper {
         .sessionId(sessionId)
         .inputText(prompt)
         .enableTrace(enableTrace)
-        .sessionState(buildSessionState(knowledgeBaseId, numberOfResults, overrideSearchType, filterType, metadataFilters))
+        .sessionState(buildSessionState(knowledgeBaseConfigs))
         .bedrockModelConfigurations(buildModelConfigurations(latencyOptimized))
         .promptCreationConfigurations(buildPromptConfigurations(excludePreviousThinkingSteps, previousConversationTurnsToInclude))
         .build();
@@ -743,6 +739,7 @@ public class AwsbedrockAgentsPayloadHelper {
                                                    AwsbedrockConfiguration configuration,
                                                    AwsbedrockAgentsSessionParameters awsBedrockSessionParameters,
                                                    AwsbedrockAgentsFilteringParameters awsBedrockAgentsFilteringParameters,
+                                                   AwsbedrockAgentsMultipleFilteringParameters awsBedrockAgentsMultipleFilteringParameters,
                                                    AwsbedrockAgentsParameters awsBedrockParameters) {
 
     return BedrockClientInvoker.executeWithErrorHandling(() -> {
@@ -757,11 +754,8 @@ public class AwsbedrockAgentsPayloadHelper {
       return invokeAgentSSEStream(agentAlias, agentId, prompt, enableTrace, latencyOptimized, effectiveSessionId,
                                   awsBedrockSessionParameters.getExcludePreviousThinkingSteps(),
                                   awsBedrockSessionParameters.getPreviousConversationTurnsToInclude(),
-                                  awsBedrockAgentsFilteringParameters.getKnowledgeBaseId(),
-                                  awsBedrockAgentsFilteringParameters.getNumberOfResults(),
-                                  awsBedrockAgentsFilteringParameters.getOverrideSearchType(),
-                                  awsBedrockAgentsFilteringParameters.getRetrievalMetadataFilterType(),
-                                  awsBedrockAgentsFilteringParameters.getMetadataFilters(),
+                                  buildKnowledgeBaseConfigs(awsBedrockAgentsFilteringParameters,
+                                                            awsBedrockAgentsMultipleFilteringParameters),
                                   bedrockAgentRuntimeAsyncClient);
     });
   }
@@ -774,10 +768,7 @@ public class AwsbedrockAgentsPayloadHelper {
   public static InputStream invokeAgentSSEStream(String agentAlias, String agentId, String prompt,
                                                  Boolean enableTrace, Boolean latencyOptimized, String sessionId,
                                                  Boolean excludePreviousThinkingSteps, Integer previousConversationTurnsToInclude,
-                                                 String knowledgeBaseId, Integer numberOfResults,
-                                                 AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
-                                                 AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
-                                                 Map<String, String> metadataFilters,
+                                                 java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
                                                  BedrockAgentRuntimeAsyncClient bedrockAgentRuntimeAsyncClient) {
     try {
       // Create piped streams for real-time streaming
@@ -789,8 +780,7 @@ public class AwsbedrockAgentsPayloadHelper {
         try {
           streamBedrockResponse(agentAlias, agentId, prompt, enableTrace, latencyOptimized, sessionId,
                                 excludePreviousThinkingSteps, previousConversationTurnsToInclude,
-                                knowledgeBaseId, numberOfResults, overrideSearchType, filterType, metadataFilters,
-                                bedrockAgentRuntimeAsyncClient, outputStream);
+                                knowledgeBaseConfigs, bedrockAgentRuntimeAsyncClient, outputStream);
         } catch (Exception e) {
           try {
             // Send error as SSE event
@@ -819,10 +809,7 @@ public class AwsbedrockAgentsPayloadHelper {
   private static void streamBedrockResponse(String agentAlias, String agentId, String prompt, Boolean enableTrace,
                                             Boolean latencyOptimized, String sessionId,
                                             Boolean excludePreviousThinkingSteps, Integer previousConversationTurnsToInclude,
-                                            String knowledgeBaseId, Integer numberOfResults,
-                                            AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
-                                            AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
-                                            Map<String, String> metadataFilters,
+                                            java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
                                             BedrockAgentRuntimeAsyncClient client,
                                             PipedOutputStream outputStream)
       throws ExecutionException, InterruptedException, IOException {
@@ -842,7 +829,7 @@ public class AwsbedrockAgentsPayloadHelper {
         .inputText(prompt)
         .streamingConfigurations(builder -> builder.streamFinalResponse(true))
         .enableTrace(enableTrace)
-        .sessionState(buildSessionState(knowledgeBaseId, numberOfResults, overrideSearchType, filterType, metadataFilters))
+        .sessionState(buildSessionState(knowledgeBaseConfigs))
         .bedrockModelConfigurations(buildModelConfigurations(latencyOptimized))
         .promptCreationConfigurations(buildPromptConfigurations(excludePreviousThinkingSteps, previousConversationTurnsToInclude))
         .build();
@@ -945,35 +932,33 @@ public class AwsbedrockAgentsPayloadHelper {
     return completionData;
   }
 
-  private static JSONObject createErrorJson(Throwable error) {
     JSONObject errorData = new JSONObject();
-    errorData.put("error", error.getMessage());
-    errorData.put("type", error.getClass().getSimpleName());
-    errorData.put(TIMESTAMP, Instant.now().toString());
-    return errorData;
+  private static String formatSSEEvent(String eventType, String payload) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("event: ").append(eventType).append("\n");
+    sb.append("data: ").append(payload).append("\n\n");
+    return sb.toString();
   }
 
-  private static String formatSSEEvent(String eventType, String data) {
-    int eventId = eventCounter.incrementAndGet();
-    return String.format("id: %d%nevent: %s%ndata: %s%n%n", eventId, eventType, data);
+  private static JSONObject createErrorJson(Exception e) {
+    JSONObject obj = new JSONObject();
+    obj.put("error", e == null ? "unknown" : e.getMessage());
+    return obj;
   }
 
-
-
-  private static Consumer<SessionState.Builder> buildSessionState(String knowledgeBaseId, Integer numberOfResults,
-                                                                  AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType,
-                                                                  AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType filterType,
-                                                                  Map<String, String> metadataFilters) {
+  private static java.util.function.Consumer<SessionState.Builder> buildSessionState(
+                                                                                     java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> kbConfigs) {
     return sessionStateBuilder -> {
-      KnowledgeBaseVectorSearchConfiguration vectorSearchConfig =
-          buildVectorSearchConfiguration(numberOfResults, overrideSearchType, filterType, metadataFilters);
+      if (kbConfigs == null || kbConfigs.isEmpty()) {
+        return;
+      }
 
-      if (vectorSearchConfig != null && knowledgeBaseId != null) {
-        sessionStateBuilder.knowledgeBaseConfigurations(
-                                                        kbConfigBuilder -> kbConfigBuilder.knowledgeBaseId(knowledgeBaseId)
-                                                            .retrievalConfiguration(
-                                                                                    retrievalConfigBuilder -> retrievalConfigBuilder
-                                                                                        .vectorSearchConfiguration(vectorSearchConfig)));
+      List<KnowledgeBaseConfiguration> sdkKbConfigs =
+          kbConfigs.stream().map(kb -> KnowledgeBaseConfiguration.builder().knowledgeBaseId(kb.getKnowledgeBaseId()).build())
+              .collect(Collectors.toList());
+
+      if (!sdkKbConfigs.isEmpty()) {
+        sessionStateBuilder.knowledgeBaseConfigurations(sdkKbConfigs);
       }
     };
   }
@@ -1047,6 +1032,47 @@ public class AwsbedrockAgentsPayloadHelper {
           .applyMutation(applyOptionalOverrideSearchType)
           .build();
     }
+
+  }
+
+  private static java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> buildKnowledgeBaseConfigs(
+                                                                                                                                                                org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters legacyParams,
+                                                                                                                                                                org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsMultipleFilteringParameters multipleParams) {
+    if (multipleParams != null && multipleParams.getKnowledgeBases() != null && !multipleParams.getKnowledgeBases().isEmpty()) {
+      // If legacy single-KB fields are also provided, warn that they will be ignored
+      if (legacyParams != null && (legacyParams.getKnowledgeBaseId() != null
+          || legacyParams.getNumberOfResults() != null
+          || legacyParams.getOverrideSearchType() != null
+          || legacyParams.getRetrievalMetadataFilterType() != null
+          || (legacyParams.getMetadataFilters() != null && !legacyParams.getMetadataFilters().isEmpty()))) {
+        logger
+            .warn("Multiple knowledge bases provided; legacy single-KB fields will be ignored.");
+      }
+      return multipleParams.getKnowledgeBases();
+    }
+
+    if (legacyParams == null) {
+      return null;
+    }
+
+    // Fallback: if legacy single KB id is provided, map it to a per-KB config
+    String id = legacyParams.getKnowledgeBaseId();
+    if (id == null || id.isEmpty()) {
+      return null;
+    }
+
+    return Collections
+        .singletonList(new org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig(
+                                                                                                                                id,
+                                                                                                                                legacyParams
+                                                                                                                                    .getNumberOfResults(),
+                                                                                                                                legacyParams
+                                                                                                                                    .getOverrideSearchType(),
+                                                                                                                                legacyParams
+                                                                                                                                    .getRetrievalMetadataFilterType(),
+                                                                                                                                legacyParams
+                                                                                                                                    .getMetadataFilters()));
+
 
   }
 

@@ -11,10 +11,12 @@ import java.util.stream.Collectors;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.mule.extension.mulechain.internal.AwsbedrockConfiguration;
+import org.mule.extension.mulechain.internal.BedrockError;
 import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters;
 import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsMultipleFilteringParameters;
 import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsParameters;
 import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsSessionParameters;
+import org.mule.runtime.extension.api.exception.ModuleException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.core.document.Document;
@@ -606,6 +608,8 @@ public class AwsbedrockAgentsPayloadHelper {
                          awsbedrockAgentsSessionParameters.getPreviousConversationTurnsToInclude(),
                          buildKnowledgeBaseConfigs(awsBedrockAgentsFilteringParameters,
                                                    awsBedrockAgentsMultipleFilteringParameters),
+                         null,
+                         null,
                          bedrockAgentRuntimeAsyncClient)
           .thenApply(response -> {
             logger.debug(response);
@@ -614,16 +618,158 @@ public class AwsbedrockAgentsPayloadHelper {
     });
   }
 
+  /**
+   * Accept a full JSON payload constructed by the caller that represents the InvokeAgent body (or at least the common fields). If
+   * `stream` is true the method returns an SSE InputStream with incremental events; otherwise it returns a single aggregated JSON
+   * InputStream.
+   */
+  public static InputStream invokeAgentWithJson(String jsonPayload, boolean stream, boolean latencyOptimized,
+                                                AwsbedrockConfiguration configuration,
+                                                AwsbedrockAgentsParameters awsBedrockParameters) {
+    return BedrockClientInvoker.executeWithErrorHandling(() -> {
+      BedrockAgentRuntimeAsyncClient client = BedrockClients.getAgentRuntimeAsyncClient(configuration,
+                                                                                        awsBedrockParameters);
+
+      JSONObject obj = new JSONObject(jsonPayload == null ? "{}" : jsonPayload);
+
+      String agentId = obj.has("agentId") ? obj.getString("agentId") : null;
+      String agentAlias = obj.has("agentAliasId") ? obj.getString("agentAliasId")
+          : (obj.has("agentAlias") ? obj.getString("agentAlias") : null);
+      String prompt = obj.has("inputText") ? obj.getString("inputText") : obj.optString("prompt", null);
+      String sessionId = obj.optString("sessionId", null);
+      Boolean enableTrace = obj.has("enableTrace") ? obj.getBoolean("enableTrace") : null;
+      // Additional top-level fields
+      Boolean endSession = obj.has("endSession") ? obj.optBoolean("endSession", false) : null;
+      String memoryId = obj.has("memoryId") ? obj.optString("memoryId", null) : null;
+      Boolean excludePreviousThinkingSteps =
+          obj.has("excludePreviousThinkingSteps") ? obj.getBoolean("excludePreviousThinkingSteps") : null;
+      Integer previousConversationTurnsToInclude =
+          obj.has("previousConversationTurnsToInclude") ? obj.getInt("previousConversationTurnsToInclude") : null;
+
+      // Determine effective streaming and latency flags (parameters are effectively final)
+      boolean effectiveStream = stream;
+      boolean effectiveLatencyOptimized = latencyOptimized;
+
+      // streaming option: top-level `stream` or streamingConfigurations.streamFinalResponse
+      Integer applyGuardrailInterval = null;
+      Boolean scStreamFinal = null;
+      if (obj.has("streamingConfigurations")) {
+        JSONObject sc = obj.optJSONObject("streamingConfigurations");
+        if (sc != null) {
+          if (sc.has("streamFinalResponse")) {
+            scStreamFinal = sc.optBoolean("streamFinalResponse", false);
+            effectiveStream = effectiveStream || scStreamFinal;
+          }
+          if (sc.has("applyGuardrailInterval")) {
+            applyGuardrailInterval = sc.optInt("applyGuardrailInterval");
+          }
+        }
+      }
+
+      // Map bedrockModelConfigurations.performanceConfig.latency to latencyOptimized when present
+      if (obj.has("bedrockModelConfigurations")) {
+        JSONObject bmc = obj.optJSONObject("bedrockModelConfigurations");
+        if (bmc != null && bmc.has("performanceConfig")) {
+          JSONObject perf = bmc.optJSONObject("performanceConfig");
+          if (perf != null && perf.has("latency")) {
+            String latency = perf.optString("latency", null);
+            if (latency != null) {
+              effectiveLatencyOptimized = "optimized".equalsIgnoreCase(latency);
+            }
+          }
+        }
+      }
+
+      // Require at least agentId or agentAliasId
+      if ((agentId == null || agentId.isEmpty()) && (agentAlias == null || agentAlias.isEmpty())) {
+        throw new ModuleException("Missing required field: agentId or agentAliasId must be provided",
+                                  BedrockError.VALIDATION_ERROR);
+      }
+
+      // If sessionId not provided, generate one so requests conform to Bedrock's expectation
+      String effectiveSessionId = (sessionId != null && !sessionId.isEmpty()) ? sessionId : UUID.randomUUID().toString();
+      logger.info("Using sessionId: {}", effectiveSessionId);
+
+      // Parse sessionState and knowledgeBaseConfigurations if provided
+      List<AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> kbConfigs = null;
+      JSONObject sessionStateObj = null;
+      if (obj.has("sessionState")) {
+        sessionStateObj = obj.optJSONObject("sessionState");
+        if (sessionStateObj != null && sessionStateObj.has("knowledgeBaseConfigurations")) {
+          JSONArray kbArray = sessionStateObj.optJSONArray("knowledgeBaseConfigurations");
+          if (kbArray != null && kbArray.length() > 0) {
+            kbConfigs = new ArrayList<>();
+            for (int i = 0; i < kbArray.length(); i++) {
+              JSONObject kb = kbArray.optJSONObject(i);
+              if (kb == null)
+                continue;
+              String kbId = kb.optString("knowledgeBaseId", null);
+              Integer numberOfResults = kb.has("numberOfResults") ? kb.optInt("numberOfResults") : null;
+              AwsbedrockAgentsFilteringParameters.SearchType overrideSearchType = null;
+              if (kb.has("overrideSearchType")) {
+                String raw = kb.getString("overrideSearchType").toUpperCase();
+                try {
+                  overrideSearchType = AwsbedrockAgentsFilteringParameters.SearchType.valueOf(raw);
+                } catch (IllegalArgumentException ex) {
+                  throw new ModuleException("Invalid overrideSearchType: " + raw, BedrockError.VALIDATION_ERROR, ex);
+                }
+              }
+              AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType retrievalMetadataFilterType = null;
+              if (kb.has("retrievalMetadataFilterType")) {
+                String raw = kb.getString("retrievalMetadataFilterType").toUpperCase();
+                try {
+                  retrievalMetadataFilterType = AwsbedrockAgentsFilteringParameters.RetrievalMetadataFilterType.valueOf(raw);
+                } catch (IllegalArgumentException ex) {
+                  throw new ModuleException("Invalid retrievalMetadataFilterType: " + raw, BedrockError.VALIDATION_ERROR, ex);
+                }
+              }
+              Map<String, String> metadataFilters = null;
+              if (kb.has("metadataFilters")) {
+                JSONObject mf = kb.optJSONObject("metadataFilters");
+                if (mf != null) {
+                  metadataFilters = new HashMap<>();
+                  for (String key : mf.keySet()) {
+                    metadataFilters.put(key, mf.optString(key, null));
+                  }
+                }
+              }
+              kbConfigs
+                  .add(new AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig(kbId, numberOfResults, overrideSearchType,
+                                                                                   retrievalMetadataFilterType, metadataFilters));
+            }
+          }
+        }
+      }
+
+      if (effectiveStream) {
+        // Return SSE stream
+        return invokeAgentSSEStream(agentAlias, agentId, prompt, enableTrace, effectiveLatencyOptimized, effectiveSessionId,
+                                    excludePreviousThinkingSteps, previousConversationTurnsToInclude, kbConfigs,
+                                    applyGuardrailInterval, endSession,
+                                    memoryId, client);
+      } else {
+        // Non-streaming: aggregate and return a single JSON input stream
+        String response = invokeAgent(agentAlias, agentId, prompt, enableTrace, effectiveLatencyOptimized, effectiveSessionId,
+                                      excludePreviousThinkingSteps, previousConversationTurnsToInclude, kbConfigs, endSession,
+                                      memoryId, client)
+            .join();
+        return new ByteArrayInputStream(response.getBytes(StandardCharsets.UTF_8));
+      }
+    });
+  }
+
   private static CompletableFuture<String> invokeAgent(String agentAlias, String agentId, String prompt,
                                                        Boolean enableTrace, Boolean latencyOptimized, String sessionId,
                                                        Boolean excludePreviousThinkingSteps,
                                                        Integer previousConversationTurnsToInclude,
                                                        java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
+                                                       Boolean endSession,
+                                                       String memoryId,
                                                        BedrockAgentRuntimeAsyncClient bedrockAgentRuntimeAsyncClient) {
 
     long startTime = System.currentTimeMillis();
 
-    InvokeAgentRequest request = InvokeAgentRequest.builder()
+    InvokeAgentRequest.Builder reqBuilder = InvokeAgentRequest.builder()
         .agentId(agentId)
         .agentAliasId(agentAlias)
         .sessionId(sessionId)
@@ -631,8 +777,17 @@ public class AwsbedrockAgentsPayloadHelper {
         .enableTrace(enableTrace)
         .sessionState(buildSessionState(knowledgeBaseConfigs))
         .bedrockModelConfigurations(buildModelConfigurations(latencyOptimized))
-        .promptCreationConfigurations(buildPromptConfigurations(excludePreviousThinkingSteps, previousConversationTurnsToInclude))
-        .build();
+        .promptCreationConfigurations(buildPromptConfigurations(excludePreviousThinkingSteps,
+                                                                previousConversationTurnsToInclude));
+
+    if (endSession != null) {
+      reqBuilder.endSession(endSession);
+    }
+    if (memoryId != null) {
+      reqBuilder.memoryId(memoryId);
+    }
+
+    InvokeAgentRequest request = reqBuilder.build();
 
     CompletableFuture<String> completionFuture = new CompletableFuture<>();
 
@@ -756,6 +911,9 @@ public class AwsbedrockAgentsPayloadHelper {
                                   awsBedrockSessionParameters.getPreviousConversationTurnsToInclude(),
                                   buildKnowledgeBaseConfigs(awsBedrockAgentsFilteringParameters,
                                                             awsBedrockAgentsMultipleFilteringParameters),
+                                  null,
+                                  null,
+                                  null,
                                   bedrockAgentRuntimeAsyncClient);
     });
   }
@@ -769,6 +927,9 @@ public class AwsbedrockAgentsPayloadHelper {
                                                  Boolean enableTrace, Boolean latencyOptimized, String sessionId,
                                                  Boolean excludePreviousThinkingSteps, Integer previousConversationTurnsToInclude,
                                                  java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
+                                                 Integer applyGuardrailInterval,
+                                                 Boolean endSession,
+                                                 String memoryId,
                                                  BedrockAgentRuntimeAsyncClient bedrockAgentRuntimeAsyncClient) {
     try {
       // Create piped streams for real-time streaming
@@ -780,7 +941,8 @@ public class AwsbedrockAgentsPayloadHelper {
         try {
           streamBedrockResponse(agentAlias, agentId, prompt, enableTrace, latencyOptimized, sessionId,
                                 excludePreviousThinkingSteps, previousConversationTurnsToInclude,
-                                knowledgeBaseConfigs, bedrockAgentRuntimeAsyncClient, outputStream);
+                                knowledgeBaseConfigs, applyGuardrailInterval, endSession, memoryId,
+                                bedrockAgentRuntimeAsyncClient, outputStream);
         } catch (Exception e) {
           try {
             // Send error as SSE event
@@ -810,6 +972,9 @@ public class AwsbedrockAgentsPayloadHelper {
                                             Boolean latencyOptimized, String sessionId,
                                             Boolean excludePreviousThinkingSteps, Integer previousConversationTurnsToInclude,
                                             java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
+                                            Integer applyGuardrailInterval,
+                                            Boolean endSession,
+                                            String memoryId,
                                             BedrockAgentRuntimeAsyncClient client,
                                             PipedOutputStream outputStream)
       throws ExecutionException, InterruptedException, IOException {
@@ -822,17 +987,33 @@ public class AwsbedrockAgentsPayloadHelper {
     outputStream.flush();
     logger.info(sseStart);
 
-    InvokeAgentRequest request = InvokeAgentRequest.builder()
+    InvokeAgentRequest.Builder reqBuilder = InvokeAgentRequest.builder()
         .agentId(agentId)
         .agentAliasId(agentAlias)
         .sessionId(sessionId)
         .inputText(prompt)
-        .streamingConfigurations(builder -> builder.streamFinalResponse(true))
         .enableTrace(enableTrace)
         .sessionState(buildSessionState(knowledgeBaseConfigs))
         .bedrockModelConfigurations(buildModelConfigurations(latencyOptimized))
-        .promptCreationConfigurations(buildPromptConfigurations(excludePreviousThinkingSteps, previousConversationTurnsToInclude))
-        .build();
+        .promptCreationConfigurations(buildPromptConfigurations(excludePreviousThinkingSteps,
+                                                                previousConversationTurnsToInclude));
+
+    // streaming configurations: always set streamFinalResponse(true) for SSE stream; optionally apply guardrail interval
+    reqBuilder.streamingConfigurations(b -> {
+      b.streamFinalResponse(true);
+      if (applyGuardrailInterval != null) {
+        b.applyGuardrailInterval(applyGuardrailInterval);
+      }
+    });
+
+    if (endSession != null) {
+      reqBuilder.endSession(endSession);
+    }
+    if (memoryId != null) {
+      reqBuilder.memoryId(memoryId);
+    }
+
+    InvokeAgentRequest request = reqBuilder.build();
 
     InvokeAgentResponseHandler.Visitor visitor = InvokeAgentResponseHandler.Visitor.builder()
         .onChunk(chunk -> {

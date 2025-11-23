@@ -188,4 +188,22 @@ public class AwsbedrockAgentsOperations {
                                                                 awsBedrockAgentsParameters);
   }
 
+  /**
+   * Invoke Agent with a raw JSON payload constructed by the client. The payload should contain fields compatible with the
+   * InvokeAgent request (agentId, agentAliasId, inputText, sessionId, enableTrace, sessionState, etc.). The `stream` flag
+   * controls whether the response is returned as a single aggregated JSON (stream=false) or as streaming SSE events
+   * (stream=true).
+   */
+  @MediaType(value = APPLICATION_JSON, strict = false)
+  @Alias("AGENT-invoke-json")
+  @Throws(BedrockErrorsProvider.class)
+  @Execution(ExecutionType.BLOCKING)
+  public InputStream invokeAgentFromJson(String jsonPayload, boolean stream, boolean latencyOptimized,
+                                         @Config AwsbedrockConfiguration configuration,
+                                         @ParameterGroup(
+                                             name = "Additional properties") AwsbedrockAgentsParameters awsBedrockParameters) {
+    return AwsbedrockAgentsPayloadHelper.invokeAgentWithJson(jsonPayload, stream, latencyOptimized, configuration,
+                                                             awsBedrockParameters);
+  }
+
 }

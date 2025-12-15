@@ -783,16 +783,19 @@ public class AwsbedrockAgentsPayloadHelper {
                                 excludePreviousThinkingSteps, previousConversationTurnsToInclude,
                                 knowledgeBaseConfigs, bedrockAgentRuntimeAsyncClient, outputStream);
         } catch (Exception e) {
+          // CRITICAL: Log the primary error FIRST with full stack trace
+          logger.error("PRIMARY STREAMING ERROR - Agent: {}, Session: {}, Error: {}",
+                       agentId, sessionId, e.getMessage(), e);
           try {
             // Send error as SSE event
             String errorEvent = formatSSEEvent("error", createErrorJson(e).toString());
             outputStream.write(errorEvent.getBytes(StandardCharsets.UTF_8));
             outputStream.flush();
             outputStream.close();
-            logger.error(errorEvent);
+            logger.error("Error event sent: {}", errorEvent);
           } catch (IOException ioException) {
-            // Log error but can't do much more
-            logger.error("Error writing error event: {}", ioException.getMessage());
+            // Secondary error - pipe likely closed by consumer
+            logger.error("Could not write error to stream (consumer disconnected): {}", ioException.getMessage());
           }
         }
       });
@@ -844,14 +847,16 @@ public class AwsbedrockAgentsPayloadHelper {
             outputStream.flush();
             logger.debug(sseEvent);
           } catch (IOException e) {
+            // Log chunk write error with details
+            logger.error("Error writing chunk to stream: {}", e.getMessage(), e);
             try {
               String errorEvent = formatSSEEvent("chunk-error", createErrorJson(e).toString());
               outputStream.write(errorEvent.getBytes(StandardCharsets.UTF_8));
               outputStream.flush();
-              logger.error(errorEvent);
+              logger.error("Chunk error event sent: {}", errorEvent);
             } catch (IOException ioException) {
-              // Can't write error, stream is likely closed
-              logger.error("Error writing error event: {}", ioException.getMessage());
+              // Can't write error, stream is likely closed by consumer
+              logger.error("Could not write chunk error to stream (consumer disconnected): {}", ioException.getMessage());
             }
           }
         }).build();
@@ -859,20 +864,23 @@ public class AwsbedrockAgentsPayloadHelper {
     InvokeAgentResponseHandler handler = InvokeAgentResponseHandler.builder()
         .subscriber(visitor)
         .onError(throwable -> {
+          // CRITICAL: Log the streaming error FIRST with full details
+          logger.error("STREAMING ERROR from Bedrock Agent - Agent: {}, Session: {}, Error: {}",
+                       agentId, sessionId, throwable.getMessage(), throwable);
           try {
             // Send error event if the async streaming operation fails
             String errorEvent = formatSSEEvent("streaming-error", createErrorJson(throwable).toString());
             outputStream.write(errorEvent.getBytes(StandardCharsets.UTF_8));
             outputStream.flush();
-            logger.error("Streaming error: {}", throwable.getMessage(), throwable);
+            logger.error("Streaming error event sent: {}", errorEvent);
           } catch (IOException ioException) {
-            // Can't write error, stream is likely closed
-            logger.error("Error writing streaming error event: {}", ioException.getMessage());
+            // Can't write error, stream is likely closed by consumer
+            logger.error("Could not write streaming error to stream (consumer disconnected): {}", ioException.getMessage());
           } finally {
             try {
               outputStream.close();
             } catch (IOException ioException) {
-              logger.error("Error closing output stream after streaming error: {}", ioException.getMessage());
+              logger.error("Could not close output stream (already closed): {}", ioException.getMessage());
             }
           }
         })
@@ -886,21 +894,23 @@ public class AwsbedrockAgentsPayloadHelper {
             outputStream.flush();
             logger.info(completionEvent);
           } catch (IOException e) {
+            // Log completion write error with details
+            logger.error("Error writing completion event to stream: {}", e.getMessage(), e);
             try {
               String errorEvent = formatSSEEvent("completion-error", createErrorJson(e).toString());
               outputStream.write(errorEvent.getBytes(StandardCharsets.UTF_8));
               outputStream.flush();
-              logger.error(errorEvent);
+              logger.error("Completion error event sent: {}", errorEvent);
             } catch (IOException ioException) {
-              // Can't write error, stream is likely closed
-              logger.error("Error writing error event: {}", ioException.getMessage());
+              // Can't write error, stream is likely closed by consumer
+              logger.error("Could not write completion error to stream (consumer disconnected): {}", ioException.getMessage());
             }
           } finally {
             try {
               outputStream.close();
             } catch (IOException ioException) {
               // Log error but can't do much more
-              logger.error("Error writing error event: {}", ioException.getMessage());
+              logger.error("Could not close output stream (already closed): {}", ioException.getMessage());
             }
           }
         })

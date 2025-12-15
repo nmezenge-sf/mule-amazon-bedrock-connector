@@ -778,11 +778,18 @@ public class AwsbedrockAgentsPayloadHelper {
       PipedInputStream inputStream = new PipedInputStream(outputStream, 65536); // 64KB buffer
 
       // Start the streaming process asynchronously
+      // Use a dedicated executor to ensure the thread stays alive and is not a daemon thread
+      ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "bedrock-streaming-" + sessionId);
+        t.setDaemon(false); // Non-daemon thread to keep JVM alive
+        return t;
+      });
+
       CompletableFuture.runAsync(() -> {
         try {
           streamBedrockResponse(agentAlias, agentId, prompt, enableTrace, latencyOptimized, sessionId,
                                 excludePreviousThinkingSteps, previousConversationTurnsToInclude,
-                                knowledgeBaseConfigs, bedrockAgentRuntimeAsyncClient, outputStream);
+                                knowledgeBaseConfigs, bedrockAgentRuntimeAsyncClient, outputStream, executor);
         } catch (Exception e) {
           // CRITICAL: Log the primary error FIRST with full stack trace
           logger.error("PRIMARY STREAMING ERROR - Agent: {}, Session: {}, Error: {}",
@@ -797,9 +804,14 @@ public class AwsbedrockAgentsPayloadHelper {
           } catch (IOException ioException) {
             // Secondary error - pipe likely closed by consumer
             logger.error("Could not write error to stream (consumer disconnected): {}", ioException.getMessage());
+          } finally {
+            // Clean up executor when async task completes
+            if (executor != null) {
+              executor.shutdown();
+            }
           }
         }
-      });
+      }, executor);
 
       return inputStream;
 
@@ -816,7 +828,8 @@ public class AwsbedrockAgentsPayloadHelper {
                                             Boolean excludePreviousThinkingSteps, Integer previousConversationTurnsToInclude,
                                             java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
                                             BedrockAgentRuntimeAsyncClient client,
-                                            PipedOutputStream outputStream)
+                                            PipedOutputStream outputStream,
+                                            ExecutorService executor)
       throws IOException {
     long startTime = System.currentTimeMillis();
 
@@ -830,6 +843,13 @@ public class AwsbedrockAgentsPayloadHelper {
       outputStream.write(sseStart.getBytes(StandardCharsets.UTF_8));
       outputStream.flush();
       logger.info(sseStart);
+
+      // Send keep-alive comment immediately to prevent Mule from closing the stream
+      // SSE comment lines (starting with :) keep the connection alive
+      String keepAlive = ": keep-alive\n\n";
+      outputStream.write(keepAlive.getBytes(StandardCharsets.UTF_8));
+      outputStream.flush();
+      logger.debug("Sent keep-alive after session-start");
     } catch (IOException e) {
       streamClosed.set(true);
       logger.warn("Stream closed before initial event could be sent: {}", e.getMessage());
@@ -900,6 +920,10 @@ public class AwsbedrockAgentsPayloadHelper {
             } catch (IOException ioException) {
               logger.debug("Could not close output stream (already closed): {}", ioException.getMessage());
             }
+            // Clean up executor when error occurs
+            if (executor != null) {
+              executor.shutdown();
+            }
           }
         })
         .onComplete(() -> {
@@ -927,6 +951,10 @@ public class AwsbedrockAgentsPayloadHelper {
               // Log error but can't do much more
               logger.debug("Could not close output stream (already closed): {}", ioException.getMessage());
             }
+            // Clean up executor when streaming completes
+            if (executor != null) {
+              executor.shutdown();
+            }
           }
         })
         .build();
@@ -934,7 +962,20 @@ public class AwsbedrockAgentsPayloadHelper {
     // Start async streaming - chunks will be written as they arrive via the onChunk callback
     // Do NOT call .get() here as it would block and defeat the purpose of real-time streaming
     // Errors are handled by the onError callback in the handler
-    client.invokeAgent(request, handler);
+    logger.info("Initiating Bedrock Agent streaming request - Agent: {}, Alias: {}, Session: {}",
+                agentId, agentAlias, sessionId);
+    try {
+      client.invokeAgent(request, handler);
+      logger.debug("Bedrock Agent invokeAgent call completed (streaming continues asynchronously)");
+    } catch (Exception e) {
+      logger.error("Exception while calling invokeAgent - Agent: {}, Session: {}, Error: {}",
+                   agentId, sessionId, e.getMessage(), e);
+      streamClosed.set(true);
+      if (executor != null) {
+        executor.shutdown();
+      }
+      throw e;
+    }
   }
 
   private static JSONObject createChunkJson(PayloadPart chunk) {

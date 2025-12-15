@@ -805,7 +805,7 @@ public class AwsbedrockAgentsPayloadHelper {
     } catch (IOException e) {
       // Return error as immediate SSE event
       String errorEvent = formatSSEEvent("error", createErrorJson(e).toString());
-      logger.error(errorEvent);
+      logger.error("Failed to create piped streams for SSE streaming: {}", errorEvent);
       return new ByteArrayInputStream(errorEvent.getBytes(StandardCharsets.UTF_8));
     }
   }

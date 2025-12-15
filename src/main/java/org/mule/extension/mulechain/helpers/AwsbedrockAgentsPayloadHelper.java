@@ -771,9 +771,10 @@ public class AwsbedrockAgentsPayloadHelper {
                                                  java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
                                                  BedrockAgentRuntimeAsyncClient bedrockAgentRuntimeAsyncClient) {
     try {
-      // Create piped streams for real-time streaming
+      // Create piped streams for real-time streaming with larger buffer
+      // Default 1024 bytes is too small and can cause blocking
       PipedOutputStream outputStream = new PipedOutputStream();
-      PipedInputStream inputStream = new PipedInputStream(outputStream);
+      PipedInputStream inputStream = new PipedInputStream(outputStream, 65536); // 64KB buffer
 
       // Start the streaming process asynchronously
       CompletableFuture.runAsync(() -> {
@@ -812,7 +813,7 @@ public class AwsbedrockAgentsPayloadHelper {
                                             java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
                                             BedrockAgentRuntimeAsyncClient client,
                                             PipedOutputStream outputStream)
-      throws ExecutionException, InterruptedException, IOException {
+      throws IOException {
     long startTime = System.currentTimeMillis();
 
     // Send initial event
@@ -857,6 +858,24 @@ public class AwsbedrockAgentsPayloadHelper {
 
     InvokeAgentResponseHandler handler = InvokeAgentResponseHandler.builder()
         .subscriber(visitor)
+        .onError(throwable -> {
+          try {
+            // Send error event if the async streaming operation fails
+            String errorEvent = formatSSEEvent("streaming-error", createErrorJson(throwable).toString());
+            outputStream.write(errorEvent.getBytes(StandardCharsets.UTF_8));
+            outputStream.flush();
+            logger.error("Streaming error: {}", throwable.getMessage(), throwable);
+          } catch (IOException ioException) {
+            // Can't write error, stream is likely closed
+            logger.error("Error writing streaming error event: {}", ioException.getMessage());
+          } finally {
+            try {
+              outputStream.close();
+            } catch (IOException ioException) {
+              logger.error("Error closing output stream after streaming error: {}", ioException.getMessage());
+            }
+          }
+        })
         .onComplete(() -> {
           try {
             // Send completion event
@@ -887,8 +906,10 @@ public class AwsbedrockAgentsPayloadHelper {
         })
         .build();
 
-    CompletableFuture<Void> invocationFuture = client.invokeAgent(request, handler);
-    invocationFuture.get(); // Wait for completion
+    // Start async streaming - chunks will be written as they arrive via the onChunk callback
+    // Do NOT call .get() here as it would block and defeat the purpose of real-time streaming
+    // Errors are handled by the onError callback in the handler
+    client.invokeAgent(request, handler);
   }
 
   private static JSONObject createChunkJson(PayloadPart chunk) {
@@ -1114,4 +1135,5 @@ public class AwsbedrockAgentsPayloadHelper {
         .excludePreviousThinkingSteps(excludePreviousThinkingSteps)
         .previousConversationTurnsToInclude(previousConversationTurnsToInclude);
   }
+
 }

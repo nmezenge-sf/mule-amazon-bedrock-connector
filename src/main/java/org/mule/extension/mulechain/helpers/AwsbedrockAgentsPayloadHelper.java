@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -819,12 +820,21 @@ public class AwsbedrockAgentsPayloadHelper {
       throws IOException {
     long startTime = System.currentTimeMillis();
 
+    // Track if the stream has been closed by the consumer to avoid repeated write attempts
+    AtomicBoolean streamClosed = new AtomicBoolean(false);
+
     // Send initial event
     JSONObject startEvent = createSessionStartJson(agentAlias, agentId, prompt, sessionId, Instant.now().toString());
     String sseStart = formatSSEEvent("session-start", startEvent.toString());
-    outputStream.write(sseStart.getBytes(StandardCharsets.UTF_8));
-    outputStream.flush();
-    logger.info(sseStart);
+    try {
+      outputStream.write(sseStart.getBytes(StandardCharsets.UTF_8));
+      outputStream.flush();
+      logger.info(sseStart);
+    } catch (IOException e) {
+      streamClosed.set(true);
+      logger.warn("Stream closed before initial event could be sent: {}", e.getMessage());
+      throw e;
+    }
 
     InvokeAgentRequest request = InvokeAgentRequest.builder()
         .agentId(agentId)
@@ -840,6 +850,11 @@ public class AwsbedrockAgentsPayloadHelper {
 
     InvokeAgentResponseHandler.Visitor visitor = InvokeAgentResponseHandler.Visitor.builder()
         .onChunk(chunk -> {
+          // Skip writing if stream is already closed
+          if (streamClosed.get()) {
+            return;
+          }
+
           try {
             JSONObject chunkData = createChunkJson(chunk);
             String sseEvent = formatSSEEvent("chunk", chunkData.toString());
@@ -847,17 +862,13 @@ public class AwsbedrockAgentsPayloadHelper {
             outputStream.flush();
             logger.debug(sseEvent);
           } catch (IOException e) {
-            // Log chunk write error with details
-            logger.error("Error writing chunk to stream: {}", e.getMessage(), e);
-            try {
-              String errorEvent = formatSSEEvent("chunk-error", createErrorJson(e).toString());
-              outputStream.write(errorEvent.getBytes(StandardCharsets.UTF_8));
-              outputStream.flush();
-              logger.error("Chunk error event sent: {}", errorEvent);
-            } catch (IOException ioException) {
-              // Can't write error, stream is likely closed by consumer
-              logger.error("Could not write chunk error to stream (consumer disconnected): {}", ioException.getMessage());
+            // Mark stream as closed and log only once
+            if (streamClosed.compareAndSet(false, true)) {
+              logger.warn("Consumer disconnected - stream closed. Agent: {}, Session: {}. " +
+                  "This usually indicates the HTTP client timed out or disconnected. " +
+                  "Consider increasing HTTP listener timeout settings.", agentId, sessionId);
             }
+            // Don't log every subsequent chunk failure - stream is already closed
           }
         }).build();
 
@@ -867,6 +878,13 @@ public class AwsbedrockAgentsPayloadHelper {
           // CRITICAL: Log the streaming error FIRST with full details
           logger.error("STREAMING ERROR from Bedrock Agent - Agent: {}, Session: {}, Error: {}",
                        agentId, sessionId, throwable.getMessage(), throwable);
+
+          // Skip error event if stream is already closed
+          if (streamClosed.get()) {
+            logger.debug("Skipping error event - stream already closed by consumer");
+            return;
+          }
+
           try {
             // Send error event if the async streaming operation fails
             String errorEvent = formatSSEEvent("streaming-error", createErrorJson(throwable).toString());
@@ -874,17 +892,23 @@ public class AwsbedrockAgentsPayloadHelper {
             outputStream.flush();
             logger.error("Streaming error event sent: {}", errorEvent);
           } catch (IOException ioException) {
-            // Can't write error, stream is likely closed by consumer
-            logger.error("Could not write streaming error to stream (consumer disconnected): {}", ioException.getMessage());
+            streamClosed.set(true);
+            logger.warn("Stream closed before error event could be sent: {}", ioException.getMessage());
           } finally {
             try {
               outputStream.close();
             } catch (IOException ioException) {
-              logger.error("Could not close output stream (already closed): {}", ioException.getMessage());
+              logger.debug("Could not close output stream (already closed): {}", ioException.getMessage());
             }
           }
         })
         .onComplete(() -> {
+          // Skip completion event if stream is already closed
+          if (streamClosed.get()) {
+            logger.debug("Skipping completion event - stream already closed by consumer");
+            return;
+          }
+
           try {
             // Send completion event
             long endTime = System.currentTimeMillis();
@@ -894,23 +918,14 @@ public class AwsbedrockAgentsPayloadHelper {
             outputStream.flush();
             logger.info(completionEvent);
           } catch (IOException e) {
-            // Log completion write error with details
-            logger.error("Error writing completion event to stream: {}", e.getMessage(), e);
-            try {
-              String errorEvent = formatSSEEvent("completion-error", createErrorJson(e).toString());
-              outputStream.write(errorEvent.getBytes(StandardCharsets.UTF_8));
-              outputStream.flush();
-              logger.error("Completion error event sent: {}", errorEvent);
-            } catch (IOException ioException) {
-              // Can't write error, stream is likely closed by consumer
-              logger.error("Could not write completion error to stream (consumer disconnected): {}", ioException.getMessage());
-            }
+            streamClosed.set(true);
+            logger.warn("Stream closed before completion event could be sent: {}", e.getMessage());
           } finally {
             try {
               outputStream.close();
             } catch (IOException ioException) {
               // Log error but can't do much more
-              logger.error("Could not close output stream (already closed): {}", ioException.getMessage());
+              logger.debug("Could not close output stream (already closed): {}", ioException.getMessage());
             }
           }
         })

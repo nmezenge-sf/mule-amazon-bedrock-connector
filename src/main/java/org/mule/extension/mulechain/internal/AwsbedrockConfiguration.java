@@ -58,8 +58,8 @@ public class AwsbedrockConfiguration implements Disposable {
   private ProxyConfig proxyConfig;
 
   @Parameter
-  @Optional(defaultValue = "10")
-  @Summary("Maximum time to wait for a response from Bedrock")
+  @Optional(defaultValue = "300")
+  @Summary("Maximum time to wait for a response from Bedrock (especially important for streaming operations)")
   @Placement(tab = "Connection")
   private Integer timeout;
 

@@ -3,6 +3,7 @@ package org.mule.extension.mulechain.helpers;
 import java.io.FileInputStream;
 import java.net.URI;
 import java.security.KeyStore;
+import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import javax.net.ssl.TrustManagerFactory;
@@ -219,7 +220,13 @@ public class BedrockClients {
       }
     }
 
-    httpClientBuilder.readTimeout(CommonUtils.toDuration(configuration.getTimeout(), configuration.getTimeoutUnit()));
+    // Configure ALL timeouts for async client - critical for streaming operations
+    Duration timeoutDuration = CommonUtils.toDuration(configuration.getTimeout(), configuration.getTimeoutUnit());
+    httpClientBuilder.readTimeout(timeoutDuration)
+        .writeTimeout(timeoutDuration) // Critical for streaming write operations
+        .connectionTimeout(timeoutDuration) // Connection establishment - respects configured timeout
+        .connectionAcquisitionTimeout(timeoutDuration); // Getting connection from pool
+
     return httpClientBuilder.build();
   }
 

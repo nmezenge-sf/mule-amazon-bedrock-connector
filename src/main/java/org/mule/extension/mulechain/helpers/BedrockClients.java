@@ -10,10 +10,13 @@ import javax.net.ssl.TrustManagerFactory;
 import org.mule.extension.mulechain.internal.*;
 import org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsParameters;
 import org.mule.extension.mulechain.internal.embeddings.AwsbedrockParametersEmbedding;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentials;
 import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.http.SdkHttpClient;
 import software.amazon.awssdk.http.TlsTrustManagersProvider;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
@@ -39,6 +42,7 @@ import software.amazon.awssdk.services.iam.IamClient;
  */
 public class BedrockClients {
 
+  private static final Logger logger = LoggerFactory.getLogger(BedrockClients.class);
   private static final ConcurrentHashMap<String, Object> clients = new ConcurrentHashMap<>();
 
   @SuppressWarnings("unchecked")
@@ -73,6 +77,22 @@ public class BedrockClients {
       if (configuration.getEndpointOverride() != null && !configuration.getEndpointOverride().isBlank()) {
         bedrockAgentRuntimeAsyncClientBuilder.endpointOverride(URI.create(configuration.getEndpointOverride()));
       }
+
+      // Configure API-level timeouts for streaming operations
+      Integer timeout = configuration.getTimeout();
+      TimeUnitEnum timeoutUnit = configuration.getTimeoutUnit();
+      if (timeout != null && timeoutUnit != null) {
+        Duration apiTimeoutDuration = CommonUtils.toDuration(timeout, timeoutUnit);
+        logger.debug("Configuring API-level timeouts: {} {} (apiCallTimeout, apiCallAttemptTimeout)", timeout, timeoutUnit);
+        bedrockAgentRuntimeAsyncClientBuilder.overrideConfiguration(
+                                                                    ClientOverrideConfiguration.builder()
+                                                                        .apiCallTimeout(apiTimeoutDuration)
+                                                                        .apiCallAttemptTimeout(apiTimeoutDuration)
+                                                                        .build());
+      } else {
+        logger.warn("Timeout configuration is null - using SDK defaults. This may cause premature timeouts!");
+      }
+
       bedrockAgentRuntimeAsyncClientBuilder.httpClient(getConfiguredAsyncHttpClient(configuration));
       return bedrockAgentRuntimeAsyncClientBuilder.build();
     });
@@ -221,11 +241,23 @@ public class BedrockClients {
     }
 
     // Configure ALL timeouts for async client - critical for streaming operations
-    Duration timeoutDuration = CommonUtils.toDuration(configuration.getTimeout(), configuration.getTimeoutUnit());
+    Integer timeout = configuration.getTimeout();
+    TimeUnitEnum timeoutUnit = configuration.getTimeoutUnit();
+
+    // Use configured timeout or default to 300 seconds if not set
+    int effectiveTimeout = (timeout != null) ? timeout : 300;
+    TimeUnitEnum effectiveUnit = (timeoutUnit != null) ? timeoutUnit : TimeUnitEnum.SECONDS;
+    Duration timeoutDuration = CommonUtils.toDuration(effectiveTimeout, effectiveUnit);
+
+    logger
+        .debug("Configuring async HTTP client timeouts: {} {} (readTimeout, writeTimeout, connectionTimeout, connectionAcquisitionTimeout, tlsNegotiationTimeout)",
+               effectiveTimeout, effectiveUnit);
+
     httpClientBuilder.readTimeout(timeoutDuration)
         .writeTimeout(timeoutDuration) // Critical for streaming write operations
         .connectionTimeout(timeoutDuration) // Connection establishment - respects configured timeout
-        .connectionAcquisitionTimeout(timeoutDuration); // Getting connection from pool
+        .connectionAcquisitionTimeout(timeoutDuration) // Getting connection from pool
+        .tlsNegotiationTimeout(timeoutDuration); // TLS handshake - was using default ~5 seconds!
 
     return httpClientBuilder.build();
   }

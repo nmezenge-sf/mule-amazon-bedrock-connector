@@ -772,10 +772,10 @@ public class AwsbedrockAgentsPayloadHelper {
                                                  java.util.List<org.mule.extension.mulechain.internal.agents.AwsbedrockAgentsFilteringParameters.KnowledgeBaseConfig> knowledgeBaseConfigs,
                                                  BedrockAgentRuntimeAsyncClient bedrockAgentRuntimeAsyncClient) {
     try {
-      // Create piped streams for real-time streaming with larger buffer
-      // Default 1024 bytes is too small and can cause blocking
+      // Create piped streams for real-time streaming
+      // Using default buffer size (1024 bytes / 1KB)
       PipedOutputStream outputStream = new PipedOutputStream();
-      PipedInputStream inputStream = new PipedInputStream(outputStream, 65536); // 64KB buffer
+      PipedInputStream inputStream = new PipedInputStream(outputStream);
 
       // Start the streaming process asynchronously
       // Use a dedicated executor to ensure the thread stays alive and is not a daemon thread

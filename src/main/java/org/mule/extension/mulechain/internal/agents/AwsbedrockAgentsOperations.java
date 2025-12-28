@@ -166,6 +166,8 @@ public class AwsbedrockAgentsOperations {
   }
 
   @MediaType(value = "text/event-stream", strict = false)
+  @Throws(BedrockErrorsProvider.class)
+  @Execution(ExecutionType.BLOCKING)
   @Alias("AGENT-chat-streaming-SSE")
   @DisplayName("Agent chat streaming (SSE)")
   public InputStream chatWithAgentSSEStream(String agentId, String agentAliasId,
